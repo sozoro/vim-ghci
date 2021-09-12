@@ -1,0 +1,122 @@
+:set -XLambdaCase
+
+:def . readFile
+
+
+-- Macro difinitions ------------------------------------------------
+:{
+:def setPSem (\_ ->
+  return $ "consoleSem <- Control.Concurrent.newMVar ()"
+    ++ "\n"
+    ++ "let withSemIO sem f = Control.Concurrent.takeMVar sem >> "
+    ++                       "Control.Exception.finally f "
+    ++                       "(Control.Concurrent.putMVar sem ())"
+    ++ "\n"
+    ++ "let ghciSemPrint = withSemIO consoleSem . putStrLn . Prelude.show"
+    ++ "\n"
+    ++ ":set -interactive-print=ghciSemPrint"
+  )
+:}
+
+:{
+:def! rel (\x -> return $ ":reload " ++ x
+                      ++ "\n"
+                      ++ ":setPSem"
+                      ++ "\n")
+:}
+
+:{
+:def loadAndSetPSem (\x -> return $ ":cdAndLoad " ++ x
+                                 ++ "\n"
+                                 ++ ":setPSem"
+                                 ++ "\n")
+:}
+
+:{
+findUpStreamFile p "/"  = findFile p "/"
+findUpStreamFile p path = findFile p path >>= \case
+  [] -> findUpStreamFile p $ System.FilePath.takeDirectory path
+  ls -> return ls
+
+findFile p path =
+  foldr (\f ls -> if p f then (path ++ "/" ++ f) : ls else ls) []
+    <$> System.Directory.listDirectory path
+
+findBeforeCabalFile path =
+  findUpStreamFile (System.FilePath.isExtensionOf ".cabal") path
+
+srcDirInCabal cabalFile = (snd . Data.List.span (== ' ')
+  . before "\n"
+  . after "hs-source-dirs:") <$> readFile cabalFile
+
+after _ []        = []
+after s ls@(_:xs) = if Data.List.isPrefixOf s ls
+  then snd $ Data.List.splitAt (length s) ls
+  else after s $ xs
+
+before _ []        = []
+before s ls@(x:xs) = if Data.List.isPrefixOf s ls
+  then []
+  else x : before s xs
+
+srcDir path = findBeforeCabalFile path >>= \case
+  []            -> return Nothing
+  (cabalFile:_) -> System.Directory.doesFileExist cabalFile
+                   >>= \case
+    False -> return Nothing
+    True  -> do
+      sdic <- srcDirInCabal cabalFile
+      let dir  = System.FilePath.takeDirectory cabalFile
+      let sDir = dir ++ "/" ++ sdic
+      exist <- System.Directory.doesPathExist sDir
+      if exist
+        then return $ Just sDir
+        else return $ Just dir
+:}
+:{
+:def cdAndLoad (\path -> srcDir (System.FilePath.takeDirectory path)
+  >>= maybe
+      (return $ ":load " ++ path)
+      (\sDir -> return $ ":cd " ++ sDir
+              ++ "\n" ++ ":load " ++ path))
+:}
+
+-- `:load` command doesn't support `:setPSem`
+--------------------------------------------------------------------
+
+-- for `FormatTime TimeZone` instance
+-- :module +Data.Time
+:{
+:set prompt-function (\modules lineNum -> do
+  let cut _ _ []     = []
+      cut c n (x:xs) | n <= 0    = []
+                     | c == x    = x : cut c (n - 1) xs
+                     | otherwise = x : cut c n xs
+
+  -- date <- formatTime defaultTimeLocale "[%m/%d] [%a] [%p %02l:%M:%S]" <$> getZonedTime
+  cwd  <- System.Directory.getCurrentDirectory
+  let rcwd = reverse cwd
+  let cwd  = reverse $ cut '/' 2 rcwd
+  return $ "\27[38;5;242m"
+        -- ++ date
+        -- ++ "\n"
+        ++ "\27[38;5;6m"
+        ++ cwd
+        ++ "\27[38;5;5m"
+        ++ " λ×" ++ Prelude.show lineNum
+        ++ "\27[38;5;0m"
+        ++ " ↓"
+        ++ "\27[0m\n")
+:}
+
+:set prompt-cont ": "
+
+:setPSem
+
+:{
+putStrLn $ "\n"
+        ++ "\27[38;5;242m"
+        ++ "consoleSem :: MVar ()\n"
+        ++ "withSemIO  :: MVar () -> IO a -> IO a\n"
+        ++ "\27[0m"
+:}
